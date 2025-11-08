@@ -1,3 +1,4 @@
+import cgi
 import html
 import json
 import logging
@@ -6,6 +7,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs
+
+import pandas as pd
 
 from metrics_core import DEFAULT_DATA, build_dataframe, build_prompt, call_openai, compute_metrics, init_client
 
@@ -43,24 +46,71 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         self._respond()
 
     def do_POST(self) -> None:
-        content_length = int(self.headers.get("Content-Length") or 0)
-        raw_body = self.rfile.read(content_length).decode("utf-8")
-        params = parse_qs(raw_body)
-        payload = params.get("telemetry", [""])[0].strip() or self.default_payload
+        telemetry_dict: Optional[dict] = None
+        payload = None
+        file_name = None
+
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.startswith("multipart/form-data"):
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": content_type,
+                },
+            )
+            payload = (form.getfirst("telemetry") or "").strip()
+            file_field = form["telemetry_file"] if "telemetry_file" in form else None
+            if file_field is not None and getattr(file_field, "filename", ""):
+                file_name = file_field.filename
+                try:
+                    file_field.file.seek(0)
+                    excel_df = pd.read_excel(file_field.file)
+                except ImportError as exc:
+                    message = (
+                        "Reading Excel files requires the 'openpyxl' dependency. "
+                        "Install it with 'pip install openpyxl'."
+                    )
+                    logger.error(message)
+                    self._respond(error=message, payload=payload)
+                    return
+                except Exception as exc:
+                    logger.error("Failed to read Excel file: %s", exc)
+                    self._respond(error=f"Failed to read Excel file: {exc}", payload=payload)
+                    return
+                telemetry_dict = excel_df.to_dict(orient="list")
+                payload = json.dumps(telemetry_dict, indent=2)
+            elif payload:
+                try:
+                    telemetry_dict = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    logger.error("Invalid JSON submitted: %s", exc)
+                    self._respond(error=f"Invalid JSON: {exc}", payload=payload)
+                    return
+        else:
+            content_length = int(self.headers.get("Content-Length") or 0)
+            raw_body = self.rfile.read(content_length).decode("utf-8")
+            params = parse_qs(raw_body)
+            payload = params.get("telemetry", [""])[0].strip()
+            if payload:
+                try:
+                    telemetry_dict = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    logger.error("Invalid JSON submitted: %s", exc)
+                    self._respond(error=f"Invalid JSON: {exc}", payload=payload)
+                    return
+
+        if telemetry_dict is None:
+            telemetry_dict = DEFAULT_DATA
+            payload = json.dumps(DEFAULT_DATA, indent=2)
 
         try:
-            telemetry = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            logger.error("Invalid JSON submitted: %s", exc)
-            self._respond(error=f"Invalid JSON: {exc}", payload=payload)
-            return
-
-        try:
-            df = build_dataframe(telemetry)
+            df = build_dataframe(telemetry_dict)
             stats = compute_metrics(df)
         except Exception as exc:
             logger.error("Telemetry processing failed: %s", exc)
-            self._respond(error=f"Telemetry processing failed: {exc}", payload=payload)
+            self._respond(error=f"Telemetry processing failed: {exc}", payload=payload, file_name=file_name)
             return
 
         prompt = build_prompt(stats)
@@ -68,13 +118,19 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             ensure_client()
             analysis = call_openai(CLIENT, prompt)
         except RuntimeError as exc:
-            self._respond(error=str(exc), payload=payload, stats=format_stats(stats))
+            self._respond(
+                error=str(exc),
+                payload=payload,
+                stats=format_stats(stats),
+                file_name=file_name,
+            )
             return
 
         self._respond(
-            payload=json.dumps(telemetry, indent=2),
+            payload=payload,
             stats=format_stats(stats),
             analysis=analysis,
+            file_name=file_name,
         )
 
     def log_message(self, format: str, *args) -> None:
@@ -87,6 +143,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         payload: Optional[str] = None,
         stats: Optional[str] = None,
         analysis: Optional[str] = None,
+        file_name: Optional[str] = None,
     ) -> None:
         textarea_value = payload or self.default_payload
         body = f"""
@@ -104,13 +161,16 @@ class TelemetryHandler(BaseHTTPRequestHandler):
 </head>
 <body>
   <h1>Telemetry Frontend</h1>
-  <p>Paste JSON telemetry data and submit to run the GPT analysis.</p>
+  <p>Paste JSON telemetry data or upload an Excel file and submit to run the GPT analysis.</p>
   {f'<p class="error">{html.escape(error)}</p>' if error else ''}
-  <form method="post">
+  <form method="post" enctype="multipart/form-data">
     <label for="telemetry">Telemetry JSON</label><br/>
     <textarea id="telemetry" name="telemetry">{html.escape(textarea_value)}</textarea><br/>
+    <label for="telemetry_file">Excel upload (.xlsx/.xls)</label><br/>
+    <input type="file" id="telemetry_file" name="telemetry_file" accept=".xlsx,.xls"/><br/><br/>
     <button type="submit">Analyze</button>
   </form>
+  {f'<p>Last uploaded file: {html.escape(file_name)}</p>' if file_name else ''}
   {f'<h2>Local Metrics</h2><pre>{html.escape(stats)}</pre>' if stats else ''}
   {f'<h2>AI Analysis</h2><pre>{html.escape(analysis)}</pre>' if analysis else ''}
 </body>
