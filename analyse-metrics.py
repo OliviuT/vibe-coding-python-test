@@ -28,8 +28,14 @@ def main() -> None:
 
     metrics = compute_metrics(df)
     logger.info("Local stats:")
-    logger.info("Avg latency: %.2f ms", metrics["avg_latency"])
-    logger.info("Total errors: %d", metrics["total_errors"])
+    if metrics["avg_latency"] is not None:
+        logger.info("Avg latency: %.2f ms", metrics["avg_latency"])
+    else:
+        logger.info("Avg latency: N/A")
+    if metrics["total_errors"] is not None:
+        logger.info("Total errors: %d", metrics["total_errors"])
+    else:
+        logger.info("Total errors: N/A")
     for warning in metrics["warnings"]:
         logger.warning(warning)
 

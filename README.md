@@ -55,10 +55,10 @@ Remember to keep `.env` and other secrets out of version control (add them to `.
 
 ## Web Frontend
 
-`frontend.py` starts a small standard-library HTTP server with a textarea where you can paste telemetry JSON or upload an Excel sheet (with `timestamp`, `requests`, `errors`, `latency_ms` columns). The server parses the input, runs the same anomaly detection, and shows both local metrics and the GPT analysis.
+`frontend.py` starts a small standard-library HTTP server with a textarea where you can paste telemetry JSON or upload a CSV/Excel sheet (with `timestamp`, `requests`, `errors`, `latency_ms` columns). The server parses the input, runs the same anomaly detection, and shows both local metrics and the GPT analysis.
 
 ```bash
 python frontend.py
 ```
 
-Open http://127.0.0.1:8000/ in your browser, paste sample data or upload an Excel file, and click **Analyze**. The textarea retains the most recent JSON so you can tweak values and re-run quickly. If you plan to upload `.xlsx` files, ensure `openpyxl` is installed (`pip install openpyxl`).
+Open http://127.0.0.1:8000/ in your browser, paste sample data or upload a CSV/Excel file, and click **Analyze**. The textarea retains the most recent JSON so you can tweak values and re-run quickly. If you plan to upload `.xlsx` files, ensure `openpyxl` is installed (`pip install openpyxl`).

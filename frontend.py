@@ -27,8 +27,8 @@ def ensure_client() -> None:
 
 def format_stats(stats: dict) -> str:
     lines = [
-        f"Avg latency: {stats['avg_latency']:.2f} ms",
-        f"Total errors: {stats['total_errors']}",
+        f"Avg latency: {stats['avg_latency']:.2f} ms" if stats["avg_latency"] is not None else "Avg latency: N/A",
+        f"Total errors: {stats['total_errors']}" if stats["total_errors"] is not None else "Total errors: N/A",
         f"Rows: {stats['row_count']}",
     ]
     if stats["warnings"]:
@@ -66,20 +66,25 @@ class TelemetryHandler(BaseHTTPRequestHandler):
                 file_name = file_field.filename
                 try:
                     file_field.file.seek(0)
-                    excel_df = pd.read_excel(file_field.file)
-                except ImportError as exc:
-                    message = (
-                        "Reading Excel files requires the 'openpyxl' dependency. "
-                        "Install it with 'pip install openpyxl'."
-                    )
-                    logger.error(message)
-                    self._respond(error=message, payload=payload)
-                    return
+                    lower_name = file_name.lower()
+                    if lower_name.endswith(".csv"):
+                        data_frame = pd.read_csv(file_field.file)
+                    else:
+                        try:
+                            data_frame = pd.read_excel(file_field.file)
+                        except ImportError:
+                            message = (
+                                "Reading Excel files requires the 'openpyxl' dependency. "
+                                "Install it with 'pip install openpyxl'."
+                            )
+                            logger.error(message)
+                            self._respond(error=message, payload=payload)
+                            return
                 except Exception as exc:
-                    logger.error("Failed to read Excel file: %s", exc)
-                    self._respond(error=f"Failed to read Excel file: {exc}", payload=payload)
+                    logger.error("Failed to read uploaded file: %s", exc)
+                    self._respond(error=f"Failed to read uploaded file: {exc}", payload=payload)
                     return
-                telemetry_dict = excel_df.to_dict(orient="list")
+                telemetry_dict = data_frame.to_dict(orient="list")
                 payload = json.dumps(telemetry_dict, indent=2)
             elif payload:
                 try:
@@ -166,8 +171,8 @@ class TelemetryHandler(BaseHTTPRequestHandler):
   <form method="post" enctype="multipart/form-data">
     <label for="telemetry">Telemetry JSON</label><br/>
     <textarea id="telemetry" name="telemetry">{html.escape(textarea_value)}</textarea><br/>
-    <label for="telemetry_file">Excel upload (.xlsx/.xls)</label><br/>
-    <input type="file" id="telemetry_file" name="telemetry_file" accept=".xlsx,.xls"/><br/><br/>
+    <label for="telemetry_file">Upload log file (.csv/.xlsx/.xls)</label><br/>
+    <input type="file" id="telemetry_file" name="telemetry_file" accept=".csv,.xlsx,.xls"/><br/><br/>
     <button type="submit">Analyze</button>
   </form>
   {f'<p>Last uploaded file: {html.escape(file_name)}</p>' if file_name else ''}

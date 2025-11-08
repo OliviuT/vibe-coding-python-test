@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Iterable
 
@@ -8,6 +9,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+API_KEY_RE = re.compile(r"sk-[A-Za-z0-9]{10,}")
+
+
+def _sanitize_error_message(message: str) -> str:
+    return API_KEY_RE.sub("sk-****", message)
 
 DEFAULT_DATA: Dict[str, list] = {
     "timestamp": [
@@ -24,7 +30,7 @@ DEFAULT_DATA: Dict[str, list] = {
 
 
 def init_client() -> OpenAI:
-    load_dotenv()
+    load_dotenv(override=True)
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is missing; populate .env before running.")
@@ -41,50 +47,68 @@ def build_dataframe(data: Dict[str, Iterable[Any]]) -> pd.DataFrame:
 
 
 def compute_metrics(df: pd.DataFrame) -> Dict[str, Any]:
-    if not {"errors", "latency_ms"}.issubset(df.columns):
-        raise ValueError("Data must include 'errors' and 'latency_ms' columns.")
-
-    avg_latency = float(df["latency_ms"].mean())
-    total_errors = int(df["errors"].sum())
     last_row = df.iloc[-1].copy()
     if "timestamp" in last_row:
         last_row["timestamp"] = str(last_row["timestamp"])
 
+    avg_latency = None
+    total_errors = None
     warnings: list[str] = []
+
+    last_errors = last_row.get("errors") if "errors" in df.columns else None
+    last_latency = last_row.get("latency_ms") if "latency_ms" in df.columns else None
+
+    if "latency_ms" in df.columns:
+        avg_latency = float(df["latency_ms"].mean())
+    if "errors" in df.columns:
+        total_errors = int(df["errors"].sum())
+
     if len(df) > 1:
         prior = df.iloc[:-1]
-        prior_errors_mean = prior["errors"].mean()
-        prior_latency_mean = prior["latency_ms"].mean()
-        if prior_errors_mean > 0 and last_row["errors"] > prior_errors_mean * 5:
-            warnings.append(
-                "Error spike detected at {timestamp}: last={last} prior_mean={mean:.2f}".format(
-                    timestamp=last_row.get("timestamp", "latest"),
-                    last=last_row["errors"],
-                    mean=prior_errors_mean,
+        if "errors" in df.columns and last_errors is not None:
+            prior_errors_mean = prior["errors"].mean()
+            if prior_errors_mean > 0 and last_errors > prior_errors_mean * 5:
+                warnings.append(
+                    "Error spike detected at {timestamp}: last={last} prior_mean={mean:.2f}".format(
+                        timestamp=last_row.get("timestamp", "latest"),
+                        last=last_errors,
+                        mean=prior_errors_mean,
+                    )
                 )
-            )
-        if prior_latency_mean > 0 and last_row["latency_ms"] > prior_latency_mean * 2:
-            warnings.append(
-                "Latency spike detected at {timestamp}: last={last} prior_mean={mean:.2f}".format(
-                    timestamp=last_row.get("timestamp", "latest"),
-                    last=last_row["latency_ms"],
-                    mean=prior_latency_mean,
+        if "latency_ms" in df.columns and last_latency is not None:
+            prior_latency_mean = prior["latency_ms"].mean()
+            if prior_latency_mean > 0 and last_latency > prior_latency_mean * 2:
+                warnings.append(
+                    "Latency spike detected at {timestamp}: last={last} prior_mean={mean:.2f}".format(
+                        timestamp=last_row.get("timestamp", "latest"),
+                        last=last_latency,
+                        mean=prior_latency_mean,
+                    )
                 )
-            )
 
-    summary = (
-        f"avg_latency={avg_latency:.2f}, total_errors={total_errors}, last_row={dict(last_row)}"
-    )
+    summary_parts = []
+    if avg_latency is not None:
+        summary_parts.append(f"avg_latency={avg_latency:.2f}")
+    if total_errors is not None:
+        summary_parts.append(f"total_errors={total_errors}")
+    summary_parts.append(f"last_row={dict(last_row)}")
+    if avg_latency is None:
+        summary_parts.append("latency column missing")
+    if total_errors is None:
+        summary_parts.append("errors column missing")
+
     recent_rows = df.tail(3).to_string(index=False)
 
     return {
         "avg_latency": avg_latency,
         "total_errors": total_errors,
         "warnings": warnings,
-        "summary": summary,
+        "summary": ", ".join(summary_parts),
         "recent_rows": recent_rows,
         "row_count": len(df),
         "last_row": dict(last_row),
+        "missing_latency": avg_latency is None,
+        "missing_errors": total_errors is None,
     }
 
 
@@ -134,9 +158,10 @@ def call_openai(
             )
             break
         except Exception as exc:
-            logger.exception("OpenAI call failed on attempt %s.", attempt + 1)
+            sanitized = _sanitize_error_message(str(exc))
+            logger.exception("OpenAI call failed on attempt %s: %s", attempt + 1, sanitized)
             if attempt >= retries:
-                raise RuntimeError(f"OpenAI call failed: {exc}") from exc
+                raise RuntimeError(f"OpenAI call failed: {sanitized}") from exc
             attempt += 1
             time.sleep(retry_delay)
 
