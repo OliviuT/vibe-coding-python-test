@@ -52,3 +52,13 @@ git push origin main
 ```
 
 Remember to keep `.env` and other secrets out of version control (add them to `.gitignore`).
+
+## Web Frontend
+
+`frontend.py` starts a small standard-library HTTP server with a textarea where you can paste telemetry JSON and view both the local metrics and the GPT analysis.
+
+```bash
+python frontend.py
+```
+
+Open http://127.0.0.1:8000/ in your browser, paste sample data (matching the `DEFAULT_DATA` format), and submit to trigger the analysis. The page keeps the most recent payload so you can tweak and re-run quickly.
