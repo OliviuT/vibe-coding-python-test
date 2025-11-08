@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Any, Dict, Iterable
 
 import pandas as pd
@@ -116,20 +117,28 @@ def call_openai(
     *,
     temperature: float = 0.2,
     max_tokens: int = 250,
+    retries: int = 1,
+    retry_delay: float = 1.5,
 ) -> str:
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a senior reliability engineer. Be concise and practical."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    except Exception as exc:
-        logger.exception("OpenAI call failed.")
-        raise RuntimeError("OpenAI call failed.") from exc
+    attempt = 0
+    while True:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a senior reliability engineer. Be concise and practical."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            break
+        except Exception as exc:
+            logger.exception("OpenAI call failed on attempt %s.", attempt + 1)
+            if attempt >= retries:
+                raise RuntimeError(f"OpenAI call failed: {exc}") from exc
+            attempt += 1
+            time.sleep(retry_delay)
 
     choices = getattr(response, "choices", None)
     if not choices:
