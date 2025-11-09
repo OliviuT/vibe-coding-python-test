@@ -14,12 +14,11 @@ from email.policy import default as default_policy
 
 import pandas as pd
 
+from azure_runtime import ensure_venv_site_packages_precedence
+
+ensure_venv_site_packages_precedence()
+
 APP_DIR = Path(__file__).resolve().parent
-VENV_SITE = APP_DIR / "antenv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-AGENT_DIR = "/agents/python"
-if VENV_SITE.exists():
-    sys.path[:] = [p for p in sys.path if p != AGENT_DIR]
-    sys.path.insert(0, str(VENV_SITE))
 
 from metrics_core import DEFAULT_DATA, build_dataframe, build_prompt, call_openai, compute_metrics, init_client
 

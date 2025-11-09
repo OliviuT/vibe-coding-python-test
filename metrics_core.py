@@ -6,6 +6,11 @@ from typing import Any, Dict, Iterable
 
 import pandas as pd
 from dotenv import load_dotenv
+
+from azure_runtime import ensure_venv_site_packages_precedence
+
+ensure_venv_site_packages_precedence()
+
 from openai import OpenAI
 
 logger = logging.getLogger(__name__)
