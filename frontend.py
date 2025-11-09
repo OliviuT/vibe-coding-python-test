@@ -131,6 +131,9 @@ def format_stats(stats: dict) -> str:
     if stats.get("top_error_cause"):
         entry = stats["top_error_cause"]
         lines.append(f"Top error cause ({entry['column']}): {entry['value']} [{entry['count']}]")
+    if stats.get("top_error_message"):
+        entry = stats["top_error_message"]
+        lines.append(f"Top error message ({entry['column']}): {entry['value']} [{entry['count']}]")
     if stats.get("top_client_ip"):
         entry = stats["top_client_ip"]
         lines.append(f"Top client IP ({entry['column']}): {entry['value']} [{entry['count']}]")
@@ -248,6 +251,8 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         try:
             df = build_dataframe(telemetry_dict)
             stats = compute_metrics(df)
+            chart_payload = json.dumps(stats.get("charts") or [])
+            stats_text = format_stats(stats)
         except ValueError as exc:
             self._respond(
                 error=f"Telemetry validation failed: {exc}",
@@ -274,17 +279,19 @@ class TelemetryHandler(BaseHTTPRequestHandler):
             self._respond(
                 error=str(exc),
                 payload=payload,
-                stats=format_stats(stats),
+                stats=stats_text,
                 file_name=file_name,
+                chart_data=chart_payload,
                 status_code=502,
             )
             return
 
         self._respond(
             payload=payload,
-            stats=format_stats(stats),
+            stats=stats_text,
             analysis=analysis,
             file_name=file_name,
+            chart_data=chart_payload,
         )
 
     def log_message(self, format: str, *args) -> None:
@@ -298,9 +305,95 @@ class TelemetryHandler(BaseHTTPRequestHandler):
         stats: Optional[str] = None,
         analysis: Optional[str] = None,
         file_name: Optional[str] = None,
+        chart_data: Optional[str] = None,
         status_code: int = 200,
     ) -> None:
         textarea_value = payload or self.default_payload
+        charts_section = ""
+        if chart_data is not None:
+            chart_json = html.escape(chart_data)
+            charts_lines = [
+                "",
+                "  <section>",
+                "    <h2>Time-Range Metrics</h2>",
+                "    <div id=\"charts\" class=\"chart-grid\"></div>",
+                "  </section>",
+                f"  <script id=\"chart-data\" type=\"application/json\">{chart_json}</script>",
+                "  <script src=\"https://cdn.jsdelivr.net/npm/chart.js\"></script>",
+                "  <script>",
+                "    (function() {",
+                "      const dataElement = document.getElementById('chart-data');",
+                "      const container = document.getElementById('charts');",
+                "      if (!dataElement || !container) {",
+                "        return;",
+                "      }",
+                "      const series = JSON.parse(dataElement.textContent || '[]');",
+                "      if (!series.length) {",
+                "        container.innerHTML = '<p>No chart data available.</p>';",
+                "        return;",
+                "      }",
+                "      series.forEach(function(set) {",
+                "        const wrapper = document.createElement('div');",
+                "        wrapper.className = 'chart-card';",
+                "        const title = document.createElement('h3');",
+                "        title.textContent = set.title || set.column || 'Metric';",
+                "        const canvas = document.createElement('canvas');",
+                "        wrapper.appendChild(title);",
+                "        wrapper.appendChild(canvas);",
+                "        container.appendChild(wrapper);",
+                "        var labels = [];",
+                "        var values = [];",
+                "        if (set.points && set.points.length) {",
+                "          labels = set.points.map(function(point) {",
+                "            if (set.type === 'timeseries') {",
+                "              var parsed = Date.parse(point.timestamp);",
+                "              if (!isNaN(parsed)) {",
+                "                return new Date(parsed).toLocaleString();",
+                "              }",
+                "            }",
+                "            return point.timestamp;",
+                "          });",
+                "          values = set.points.map(function(point) {",
+                "            return point.value;",
+                "          });",
+                "        } else if (set.labels && set.values) {",
+                "          labels = set.labels;",
+                "          values = set.values;",
+                "        } else {",
+                "          wrapper.innerHTML += '<p>No data available</p>';",
+                "          return;",
+                "        }",
+                "        new Chart(canvas.getContext('2d'), {",
+                "          type: 'bar',",
+                "          data: {",
+                "            labels: labels,",
+                "            datasets: [{",
+                "              label: set.title || set.column || 'Metric',",
+                "              data: values,",
+                "              backgroundColor: '#4f46e5'",
+                "            }]",
+                "          },",
+                "          options: {",
+                "            responsive: true,",
+                "            maintainAspectRatio: false,",
+                "            scales: {",
+                "              x: {",
+                "                ticks: {",
+                "                  maxRotation: 45,",
+                "                  minRotation: 45",
+                "                }",
+                "              },",
+                "              y: {",
+                "                beginAtZero: true",
+                "              }",
+                "            }",
+                "          }",
+                "        });",
+                "      });",
+                "    })();",
+                "  </script>",
+            ]
+            charts_section = "\n".join(charts_lines)
         body = f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -322,6 +415,23 @@ class TelemetryHandler(BaseHTTPRequestHandler):
       overflow: auto;
     }}
     .error {{ color: #b00020; margin-bottom: 1rem; }}
+    .chart-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }}
+    .chart-card {{
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 1rem;
+      min-height: 260px;
+    }}
+    .chart-card canvas {{
+      width: 100% !important;
+      height: 220px !important;
+    }}
   </style>
 </head>
 <body>
@@ -339,6 +449,7 @@ class TelemetryHandler(BaseHTTPRequestHandler):
   {f'<p>Last uploaded file: {html.escape(file_name)}</p>' if file_name else ''}
   {f'<h2>Local Metrics</h2><pre class="resizable">{html.escape(stats)}</pre>' if stats else ''}
   {f'<h2>AI Analysis</h2><pre class="resizable">{html.escape(analysis)}</pre>' if analysis else ''}
+  {charts_section}
 </body>
 </html>
 """
