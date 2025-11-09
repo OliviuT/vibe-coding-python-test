@@ -17,9 +17,8 @@ import pandas as pd
 APP_DIR = Path(__file__).resolve().parent
 VENV_SITE = APP_DIR / "antenv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
 AGENT_DIR = "/agents/python"
-if AGENT_DIR in sys.path:
-    sys.path = [path for path in sys.path if path != AGENT_DIR]
 if VENV_SITE.exists():
+    sys.path[:] = [p for p in sys.path if p != AGENT_DIR]
     sys.path.insert(0, str(VENV_SITE))
 
 from metrics_core import DEFAULT_DATA, build_dataframe, build_prompt, call_openai, compute_metrics, init_client
