@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs
 
@@ -12,6 +13,11 @@ from email.parser import BytesParser
 from email.policy import default as default_policy
 
 import pandas as pd
+
+APP_DIR = Path(__file__).resolve().parent
+VENV_SITE = APP_DIR / "antenv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+if VENV_SITE.exists():
+    sys.path.insert(0, str(VENV_SITE))
 
 from metrics_core import DEFAULT_DATA, build_dataframe, build_prompt, call_openai, compute_metrics, init_client
 
